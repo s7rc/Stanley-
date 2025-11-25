@@ -1,0 +1,73 @@
+name: 🌐 TAILSCALE EXIT NODE
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: '🕐 Duration'
+        required: true
+        default: '6h'
+        type: choice
+        options:
+        - '1h'
+        - '3h' 
+        - '6h'
+
+jobs:
+  VPN-Exit-Node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: 📥 Install & Configure Tailscale
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          echo "🚀 STARTING VPN EXIT NODE..."
+          
+          # 1. Install Tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+          
+          # 2. Enable IP Forwarding (Crucial for Exit Nodes)
+          echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+          echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+          sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+          
+          # 3. Connect to Tailscale and advertise as Exit Node
+          # --advertise-exit-node: Tells Tailscale this is a router
+          # --ssh: Allows you to SSH in if needed
+          sudo tailscale up --authkey=$TAILSCALE_AUTH_KEY --hostname="github-exit-node-$GITHUB_RUN_ID" --advertise-exit-node --ssh
+          
+          echo "✅ Tailscale is UP and RUNNING!"
+          echo "🌐 IP Address: $(tailscale ip -4)"
+
+      - name: ⏳ Keep Session Alive
+        run: |
+          # Calculate duration in seconds
+          DURATION="${{ inputs.duration }}"
+          if [ "$DURATION" == "1h" ]; then SECONDS=3600; fi
+          if [ "$DURATION" == "3h" ]; then SECONDS=10800; fi
+          if [ "$DURATION" == "6h" ]; then SECONDS=21600; fi
+          
+          END_TIME=$(( $(date +%s) + SECONDS ))
+          
+          echo "┌───────────────────────────────────────────┐"
+          echo "│        🌐 VPN EXIT NODE ACTIVE            │"
+          echo "├───────────────────────────────────────────┤"
+          echo "│ 1. Go to your Tailscale Admin Console     │"
+          echo "│ 2. Find machine: github-exit-node-...     │"
+          echo "│ 3. Click 'Edit route settings'            │"
+          echo "│ 4. Check 'Use as exit node'               │"
+          echo "│ 5. On your device: Select 'Exit Node'     │"
+          echo "└───────────────────────────────────────────┘"
+          
+          # Loop until time is up
+          while [ $(date +%s) -lt $END_TIME ]; do
+              REMAINING=$((END_TIME - $(date +%s)))
+              printf "\r⏳ Keeping VPN Alive... Time remaining: %02dh:%02dm:%02ds" $((REMAINING/3600)) $((REMAINING%3600/60)) $((REMAINING%60))
+              sleep 5
+          done
+          
+          echo ""
+          echo "🛑 Time is up. Shutting down."
+          sudo tailscale logout
