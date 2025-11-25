@@ -1,0 +1,260 @@
+name: Compile DCA3 (Official Docker Method)
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_link:
+        description: 'Direct Link to GTA 3 PC Files (.zip, .7z, .rar)'
+        required: true
+      target_type:
+        description: 'Target Media'
+        required: true
+        default: 'CD-R (Burn)'
+        type: choice
+        options:
+        - 'CD-R (Burn)'
+        - 'GDEMU (SD Card)'
+
+jobs:
+  build-in-container:
+    runs-on: ubuntu-latest
+    # We use the EXACT image from their GitLab CI file
+    container:
+      image: ghcr.io/kos-builds/kos-dc:latest-14.1.0
+
+    steps:
+      - name: 📥 Clone Repository (Recursive)
+        uses: actions/checkout@v4
+        with:
+          repository: skmp/dca3-game
+          ref: beta
+          submodules: recursive
+
+      - name: ⚙️ Patch KOS (The Missing Step)
+        run: |
+          echo "🔧 Replacing stock KOS with custom dca3-kos (from GitLab CI instructions)..."
+          
+          # 1. Remove the container's default KOS
+          rm -rf /opt/toolchains/dc/kos
+          
+          # 2. Copy the project's custom KOS into place
+          cp -R vendor/dca3-kos /opt/toolchains/dc/kos
+          
+          # 3. Initialize the environment variables
+          source /etc/profile.d/kos.sh
+          
+          # 4. Rebuild the KOS Kernel & Sound Drivers (As per GitLab CI)
+          echo "Rebuilding Sound Driver..."
+          make -C /opt/toolchains/dc/kos/kernel/arch/dreamcast/sound/arm
+          
+          echo "Rebuilding Kernel..."
+          make -C /opt/toolchains/dc/kos -j $(nproc)
+          
+          # 5. Build the Utils (makeip & scramble)
+          # We need these to package the CDI, even though GitLab CI skips them
+          echo "Building Utils..."
+          make -C /opt/toolchains/dc/kos/utils/makeip
+          make -C /opt/toolchains/dc/kos/utils/scramble
+          
+          echo "✅ Build Environment Fully Patched"
+
+      - name: 🛠️ Install Helper Tools (cdi4dc)
+        run: |
+          # Install dependencies for img4dc
+          apt-get update && apt-get install -y cmake genisoimage p7zip-full wget libpng-dev
+          
+          # Compile cdi4dc (The tool that makes the CDI file)
+          git clone --recursive https://github.com/kazade/img4dc.git
+          cd img4dc/cdi4dc
+          mkdir build && cd build
+          cmake .. -Wno-dev
+          make
+          cp cdi4dc /usr/local/bin/
+          echo "✅ cdi4dc Installed"
+
+      - name: 🎮 Install User Game Assets
+        run: |
+          # Download assets
+          wget -O assets.archive "${{ inputs.game_link }}"
+          mkdir temp_extract
+          7z x assets.archive -otemp_extract -y
+          
+          # Locate game root
+          GAME_ROOT=$(find temp_extract -name "gta3.exe" -printf "%h\n" | head -n 1)
+          if [ -z "$GAME_ROOT" ]; then GAME_ROOT=$(find temp_extract -type d -name "models" -printf "%h\n" | head -n 1); fi
+          
+          if [ -z "$GAME_ROOT" ]; then
+             echo "❌ Error: Could not find GTA3 files."
+             exit 1
+          fi
+          
+          echo "📂 Copying assets to liberty folder..."
+          mkdir -p liberty
+          cp -r "$GAME_ROOT"/* liberty/
+
+      - name: 💿 Compile Game & CDI
+        run: |
+          source /etc/profile.d/kos.sh
+          cd liberty
+          
+          # Set Target Type
+          if [ "${{ inputs.target_type }}" == "CD-R (Burn)" ]; then
+            export FOR_DISC=1
+            echo "🔥 Configuration: CD-R (Burn)"
+          else
+            export FOR_DISC=0
+            echo "💾 Configuration: GDEMU"
+          fi
+          
+          # 1. Compile the Game (ELF) from Source
+          # We build from source now because we have the perfect environment.
+          # This is better than downloading the pre-built beta ELF.
+          echo "🔨 Compiling Source Code..."
+          make -j $(nproc)
+          
+          # 2. Build the Disc Image
+          echo "💿 Packaging CDI..."
+          # We point to the utils we built in Step 2
+          make cdi-prebuilt
+
+      - name: 📤 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GTA3-Dreamcast-CDI
+          path: liberty/*.cdi
+          compression-level: 0
+
+
+            mingw-w64-x86_64-libpng
+            p7zip
+            curl
+            unzip
+            jq
+
+      - name: 🛠️ Construct DreamSDK Tools
+        run: |
+          # 1. Clone KallistiOS to a fixed folder named 'dreamsdk'
+          # We use this folder as our "KOS_BASE"
+          echo "Cloning KOS..."
+          git clone --depth 1 https://github.com/KallistiOS/KallistiOS.git dreamsdk
+          
+          # 2. Compile makeip (In-Place)
+          # We go TO the file, compile it, and leave it there.
+          echo "Compiling makeip..."
+          cd dreamsdk/utils/makeip
+          gcc makeip.c -o makeip.exe -static -lpng -lz
+          
+          # Verify it exists
+          if [ ! -f "makeip.exe" ]; then
+            echo "❌ CRITICAL: makeip.exe failed to compile."
+            exit 1
+          fi
+          cd ../../..
+
+          # 3. Compile scramble (In-Place)
+          echo "Compiling scramble..."
+          cd dreamsdk/utils/scramble
+          gcc scramble.c -o scramble.exe -static
+          
+          # Verify it exists
+          if [ ! -f "scramble.exe" ]; then
+            echo "❌ CRITICAL: scramble.exe failed to compile."
+            exit 1
+          fi
+          cd ../../..
+          
+          # 4. Compile cdi4dc (Disc Image Tool)
+          echo "Compiling cdi4dc..."
+          git clone --recursive https://github.com/kazade/img4dc.git
+          cd img4dc/cdi4dc
+          cmake -G "MSYS Makefiles" .
+          make
+          # Install to global path so we can call 'cdi4dc' from anywhere
+          cp cdi4dc.exe /usr/bin/
+          
+          echo "✅ DreamSDK Environment Ready"
+
+      - name: 📥 Clone DCA3 Repo (Beta)
+        run: |
+          git clone --branch beta https://gitlab.com/skmp/dca3-game.git
+
+      - name: 📁 Prepare Liberty Folder
+        run: |
+          cd dca3-game
+          mkdir -p liberty
+
+      - name: ⬇️ Download Official Beta ELF
+        run: |
+          cd dca3-game/liberty
+          
+          echo "🔍 Fetching latest Beta ELF..."
+          ASSET_URL=$(curl -s "https://gitlab.com/api/v4/projects/skmp%2Fdca3-game/releases/beta" | \
+            jq -r '.assets.links[] | select(.name | contains("liberty") and contains("elf")) | .url')
+          
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" == "null" ]; then
+            echo "❌ Error: Could not find ELF link."
+            exit 1
+          fi
+          
+          curl -L -o dca-liberty.elf "$ASSET_URL"
+          echo "✅ ELF Downloaded"
+
+      - name: 🎮 Install User Game Assets
+        run: |
+          curl -L -o assets.archive "${{ inputs.game_link }}"
+          mkdir temp_extract
+          7z x assets.archive -otemp_extract -y
+          
+          GAME_ROOT=$(find temp_extract -name "gta3.exe" -printf "%h\n" | head -n 1)
+          if [ -z "$GAME_ROOT" ]; then
+             GAME_ROOT=$(find temp_extract -type d -name "models" -printf "%h\n" | head -n 1)
+          fi
+          
+          if [ -z "$GAME_ROOT" ]; then
+             echo "❌ Error: Could not find GTA3 files."
+             exit 1
+          fi
+          
+          echo "📂 Copying assets..."
+          cp -r "$GAME_ROOT"/* dca3-game/liberty/
+
+      - name: 💿 Build CDI
+        run: |
+          # Define Absolute Path to our Fake DreamSDK (KallistiOS)
+          # This variable tells the Makefile where to find 'utils/makeip/makeip'
+          export KOS_BASE=$(pwd)/dreamsdk
+          
+          echo "Environment KOS_BASE set to: $KOS_BASE"
+          
+          cd dca3-game/liberty
+          
+          # Configure Target
+          if [ "${{ inputs.target_type }}" == "CD-R (Burn)" ]; then
+            export FOR_DISC=1
+          else
+            export FOR_DISC=0
+          fi
+          
+          # Link Makefile if missing
+          if [ ! -f "Makefile" ]; then
+             ln -s ../Makefile Makefile
+             ln -s ../scripts scripts
+          fi
+          
+          echo "🔨 Running Make (Attempt 1)..."
+          # We pass KOS_BASE explicitly to the make command just in case
+          make cdi-prebuilt KOS_BASE="$KOS_BASE" || true
+          
+          echo "🔨 Running Make (Attempt 2)..."
+          make cdi-prebuilt KOS_BASE="$KOS_BASE"
+
+      - name: 📤 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GTA3-Dreamcast-CDI
+          path: dca3-game/liberty/*.cdi
+          compression-level: 0
+
+
+
+

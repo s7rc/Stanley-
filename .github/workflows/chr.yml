@@ -1,0 +1,35 @@
+name: Chrme
+
+on: 
+  workflow_dispatch:
+    inputs:
+      authcode:
+        description: 'Enter code'
+        required: true
+      pincode:
+        description: 'Six digit Pin'
+        default: '123456'
+        required: true
+      go:
+        description: 'Fetch go?'
+        required: true
+        type: boolean
+        default: false
+  
+jobs:
+  build:
+    runs-on: Windows-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Initializing Setup
+      run: ./setup.ps1
+    - name: Starting CRD
+      run: ${{ github.event.inputs.authcode }} -pin=${{ github.event.inputs.pincode }}
+    - name: GO
+      if: ${{ github.event.inputs.go == 'true' }}
+      run: |
+       mkdir "C:\Users\runneradmin\Downloads\who"
+       python3 ./gofile.py -pp "C:\Users\runneradmin\Downloads\who" "${{ secrets.files }}"
+    - name: Keep Alive
+      run: ./mother.ps1
