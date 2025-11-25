@@ -1,0 +1,39 @@
+name: Download GoFile Every 21 Hours
+
+on:
+  workflow_dispatch:
+  
+  schedule:
+    - cron: "0 */21 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Download file from GoFile
+        run: |
+          cat /dev/urandom | tr -dc 'a-zA-Z0-9!@#$%^&*()_+{}|:<>?' | head -c 1000 > ./woke/k.txt
+          pip install -r requirements.txt
+          python3 ./gofile-downloader.py https://gofile.io/d/gU9bX5
+
+      - name: Save to GitHub
+        if: always()
+        run: |
+          git pull
+          git config user.name github-actions
+          git config user.email actions@github.com
+          git add ./woke
+          git commit -m "revived"
+          git push
