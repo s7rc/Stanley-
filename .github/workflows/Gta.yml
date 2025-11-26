@@ -1,4 +1,4 @@
-name: Compile DCA3 (Fixed GitLab Clone)
+name: Compile DCA3 (Fixed Shell)
 
 on:
   workflow_dispatch:
@@ -18,21 +18,107 @@ on:
 jobs:
   build-in-container:
     runs-on: ubuntu-latest
-    # Using the official container from their CI
     container:
       image: ghcr.io/kos-builds/kos-dc:latest-14.1.0
+    
+    # CRITICAL FIX: Force all steps to use Bash instead of sh
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: 🚀 Prepare Container
         run: |
-          # Install Git and tools needed for the build
           apt-get update
           apt-get install -y git cmake genisoimage p7zip-full wget libpng-dev
 
       - name: 📥 Clone GitLab Repo (Beta)
         run: |
-          # Manually clone from GitLab to avoid "Repository not found" error
           git clone --recursive --branch beta https://gitlab.com/skmp/dca3-game.git .
+
+      - name: ⚙️ Patch KOS (Fixed Source Command)
+        run: |
+          echo "🔧 Replacing stock KOS with custom dca3-kos..."
+          rm -rf /opt/toolchains/dc/kos
+          cp -R vendor/dca3-kos /opt/toolchains/dc/kos
+          
+          # FIX: Use '.' instead of 'source' to be fully compliant
+          . /etc/profile.d/kos.sh
+          
+          echo "Rebuilding Sound Driver..."
+          make -C /opt/toolchains/dc/kos/kernel/arch/dreamcast/sound/arm
+          
+          echo "Rebuilding Kernel..."
+          make -C /opt/toolchains/dc/kos -j $(nproc)
+          
+          echo "Building Utils (makeip & scramble)..."
+          make -C /opt/toolchains/dc/kos/utils/makeip
+          make -C /opt/toolchains/dc/kos/utils/scramble
+          
+          # Add utils to PATH for subsequent steps
+          echo "/opt/toolchains/dc/kos/utils/makeip" >> $GITHUB_PATH
+          echo "/opt/toolchains/dc/kos/utils/scramble" >> $GITHUB_PATH
+          
+          echo "✅ Build Environment Fully Patched"
+
+      - name: 🛠️ Install Helper Tool (cdi4dc)
+        run: |
+          git clone --recursive https://github.com/kazade/img4dc.git
+          cd img4dc/cdi4dc
+          mkdir build && cd build
+          cmake .. -Wno-dev
+          make
+          cp cdi4dc /usr/local/bin/
+          echo "✅ cdi4dc Installed"
+
+      - name: 🎮 Install User Game Assets
+        run: |
+          wget -O assets.archive "${{ inputs.game_link }}"
+          mkdir temp_extract
+          7z x assets.archive -otemp_extract -y
+          
+          GAME_ROOT=$(find temp_extract -name "gta3.exe" -printf "%h\n" | head -n 1)
+          if [ -z "$GAME_ROOT" ]; then GAME_ROOT=$(find temp_extract -type d -name "models" -printf "%h\n" | head -n 1); fi
+          
+          if [ -z "$GAME_ROOT" ]; then
+             echo "❌ Error: Could not find GTA3 files."
+             exit 1
+          fi
+          
+          echo "📂 Copying assets to liberty folder..."
+          mkdir -p liberty
+          cp -r "$GAME_ROOT"/* liberty/
+
+      - name: 💿 Compile Game & CDI
+        run: |
+          # Load Environment (Using . instead of source)
+          . /etc/profile.d/kos.sh
+          
+          cd liberty
+          
+          if [ "${{ inputs.target_type }}" == "CD-R (Burn)" ]; then
+            export FOR_DISC=1
+            echo "🔥 Configuration: CD-R (Burn)"
+          else
+            export FOR_DISC=0
+            echo "💾 Configuration: GDEMU"
+          fi
+          
+          echo "🔨 Compiling Source Code..."
+          make -j $(nproc)
+          
+          echo "💿 Packaging CDI..."
+          # Manually point to the utils we built earlier if they aren't in path
+          # We use the absolute paths based on the KOS install
+          make cdi-prebuilt KOS_BASE=/opt/toolchains/dc/kos
+
+      - name: 📤 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GTA3-Dreamcast-CDI
+          path: liberty/*.cdi
+          compression-level: 0
+
 
       - name: ⚙️ Patch KOS (Critical Step)
         run: |
