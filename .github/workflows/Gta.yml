@@ -73,6 +73,103 @@ jobs:
           cp cdi4dc/cdi4dc /usr/local/bin/
           echo "✅ cdi4dc Installed"
 
+      - name: 🎮 Install User Game Assets (Fixed Case Sensitivity)
+        run: |
+          wget -O assets.archive "${{ inputs.game_link }}"
+          mkdir temp_extract
+          7z x assets.archive -otemp_extract -y
+          
+          GAME_ROOT=$(find temp_extract -name "gta3.exe" -printf "%h\n" | head -n 1)
+          if [ -z "$GAME_ROOT" ]; then GAME_ROOT=$(find temp_extract -type d -name "models" -printf "%h\n" | head -n 1); fi
+          
+          if [ -z "$GAME_ROOT" ]; then
+             echo "❌ Error: Could not find GTA3 files."
+             exit 1
+          fi
+          
+          echo "📂 Copying assets to liberty folder..."
+          mkdir -p liberty
+          cp -r "$GAME_ROOT"/* liberty/
+
+          echo "🔧 Fixing Case Sensitivity (Converting to lowercase)..."
+          # Linux builds fail if files are GTA3.IMG instead of gta3.img
+          cd liberty
+          find . -depth | while read path; do
+            dir=$(dirname "$path")
+            base=$(basename "$path")
+            newbase=$(echo "$base" | tr '[:upper:]' '[:lower:]')
+            if [ "$base" != "$newbase" ]; then
+              mv "$path" "$dir/$newbase"
+            fi
+          done
+          echo "✅ Assets normalized."
+          # List models to verify
+          ls -R models || echo "⚠️ Models folder not found (Check your zip)"
+
+      - name: 💿 Compile Game & CDI
+        run: |
+          . /etc/profile.d/kos.sh
+          cd liberty
+          
+          if [ "${{ inputs.target_type }}" == "CD-R (Burn)" ]; then
+            export FOR_DISC=1
+            echo "🔥 Configuration: CD-R (Burn)"
+          else
+            export FOR_DISC=0
+            echo "💾 Configuration: GDEMU"
+          fi
+          
+          echo "🔨 Compiling Source Code..."
+          make -j $(nproc)
+          
+          echo "💿 Packaging CDI..."
+          # Pass KOS_BASE explicitly to ensure makeip is found
+          make cdi-prebuilt KOS_BASE=/opt/toolchains/dc/kos
+
+      - name: 📤 Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GTA3-Dreamcast-CDI
+          path: liberty/*.cdi
+          compression-level: 0
+      - name: ⚙️ Patch KOS (Fix Environment)
+        run: |
+          echo "🔧 Replacing stock KOS with custom dca3-kos..."
+          rm -rf /opt/toolchains/dc/kos
+          cp -R vendor/dca3-kos /opt/toolchains/dc/kos
+          
+          # Initialize Environment
+          . /etc/profile.d/kos.sh
+          
+          echo "Rebuilding Sound Driver..."
+          make -C /opt/toolchains/dc/kos/kernel/arch/dreamcast/sound/arm
+          
+          echo "Rebuilding Kernel..."
+          make -C /opt/toolchains/dc/kos -j $(nproc)
+          
+          echo "Building Utils..."
+          make -C /opt/toolchains/dc/kos/utils/makeip
+          make -C /opt/toolchains/dc/kos/utils/scramble
+          
+          # Add to PATH so the final makefile can find them
+          echo "/opt/toolchains/dc/kos/utils/makeip" >> $GITHUB_PATH
+          echo "/opt/toolchains/dc/kos/utils/scramble" >> $GITHUB_PATH
+
+      - name: 🛠️ Install Helper Tool (cdi4dc - Fixed)
+        run: |
+          # 1. Clone Repo
+          git clone --recursive https://github.com/kazade/img4dc.git
+          
+          # 2. BUILD FROM ROOT (Fixes libedc.h error)
+          cd img4dc
+          mkdir build && cd build
+          cmake .. -Wno-dev
+          make
+          
+          # 3. Install
+          cp cdi4dc/cdi4dc /usr/local/bin/
+          echo "✅ cdi4dc Installed"
+
       - name: 🎮 Install User Game Assets
         run: |
           wget -O assets.archive "${{ inputs.game_link }}"
