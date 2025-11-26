@@ -1,0 +1,34 @@
+name: Run Proxy Checker
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  check-proxies:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests pysocks
+
+      - name: Run Pi.py
+        run: python Pi.py
+
+      # This step uploads the residential.txt file so you can download it
+      - name: Upload Residential Proxies
+        uses: actions/upload-artifact@v4
+        with:
+          name: residential-proxies
+          path: residential.txt
