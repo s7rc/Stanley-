@@ -1,10 +1,10 @@
-name: Compile DCA3 (With Failsafe)
+name: Compile DCA3 (Drive Default)
 
 on:
   workflow_dispatch:
     inputs:
       game_link:
-        description: 'Direct Link to GTA 3 PC Files (.zip, .7z)'
+        description: 'Link to other game files (Audio/Data/etc)'
         required: true
       target_type:
         description: 'Target Media'
@@ -29,7 +29,6 @@ jobs:
       - name: 🚀 Prepare Container
         run: |
           apt-get update
-          # Added python3-pip so we can install 'gdown' for the Google Drive failsafe
           apt-get install -y git cmake genisoimage p7zip-full wget libpng-dev python3-pip
 
       - name: 📥 Clone GitLab Repo (Beta)
@@ -55,7 +54,7 @@ jobs:
           make -C /opt/toolchains/dc/kos/utils/makeip
           make -C /opt/toolchains/dc/kos/utils/scramble
           
-          # Add to PATH so the final makefile can find them
+          # Add to PATH
           echo "/opt/toolchains/dc/kos/utils/makeip" >> $GITHUB_PATH
           echo "/opt/toolchains/dc/kos/utils/scramble" >> $GITHUB_PATH
 
@@ -69,57 +68,32 @@ jobs:
           cp cdi4dc /usr/local/bin/
           echo "✅ cdi4dc Installed"
 
-      - name: 🎮 Install Assets (With Google Drive Failsafe)
+      - name: 🎮 Install Assets (Googledrivedownloader)
         run: |
+          # 1. Install the requested python library
+          pip3 install googledrivedownloader requests --break-system-packages
+
           mkdir -p liberty
           mkdir temp_extract
           
-          echo "⬇️ Attempting download from user link..."
-          # We allow this to fail so we can trigger the failsafe
-          wget -O assets.archive "${{ inputs.game_link }}" || echo "⚠️ User download failed, proceeding to extraction check..."
+          # 2. Extract User Files (Audio/Data/Text)
+          echo "⬇️ Downloading user assets..."
+          wget -O assets.archive "${{ inputs.game_link }}"
+          7z x assets.archive -otemp_extract -y
           
-          # Try extracting
-          if [ -f "assets.archive" ]; then
-             7z x assets.archive -otemp_extract -y
+          # Locate game root (Looking for 'data' or 'models' folders)
+          GAME_ROOT=$(find temp_extract -type d -name "data" -printf "%h\n" | head -n 1)
+          if [ -z "$GAME_ROOT" ]; then GAME_ROOT=$(find temp_extract -type d -name "models" -printf "%h\n" | head -n 1); fi
+          
+          if [ -z "$GAME_ROOT" ]; then
+             echo "❌ Error: Could not find game structure (data/models folders) in your link."
+             exit 1
           fi
           
-          echo "🔍 Searching for gta3.img in extracted files..."
-          IMG_PATH=$(find temp_extract -iname "gta3.img" | head -n 1)
-          
-          if [ -n "$IMG_PATH" ]; then
-             # --- SCENARIO A: FOUND IN ZIP ---
-             echo "✅ Found gta3.img at: $IMG_PATH"
-             MODELS_DIR=$(dirname "$IMG_PATH")
-             GAME_ROOT=$(dirname "$MODELS_DIR")
-             
-             echo "📂 Copying assets from zip..."
-             cp -r "$GAME_ROOT"/* liberty/
-             
-          else
-             # --- SCENARIO B: FAILSAFE ---
-             echo "⚠️ gta3.img NOT found in user link! Initiating Google Drive Failsafe..."
-             
-             # 1. Install gdown (Special tool to bypass Google Drive virus warning)
-             # --break-system-packages is needed on newer Debian containers
-             pip3 install gdown --break-system-packages
-             
-             # 2. Create directory structure manually
-             mkdir -p liberty/models
-             
-             # 3. Download from Drive ID: 110aPqjYNWLCxRBITJCyD2MXkPH67jgrw
-             echo "⬇️ Downloading from Google Drive..."
-             gdown --id 110aPqjYNWLCxRBITJCyD2MXkPH67jgrw -O liberty/models/gta3.img
-             
-             if [ ! -f "liberty/models/gta3.img" ]; then
-                echo "❌ CRITICAL: Failsafe download also failed."
-                exit 1
-             fi
-             
-             # Attempt to find other assets from the bad zip if possible, otherwise we might have a partial game
-             # But this ensures the build compiles.
-             echo "✅ Failsafe successful: gta3.img acquired."
-          fi
+          echo "📂 Copying base assets to liberty..."
+          cp -r "$GAME_ROOT"/* liberty/
 
+          # 3. Normalize Filenames (Linux is case sensitive)
           echo "🔧 Normalizing filenames to lowercase..."
           cd liberty
           find . -depth | while read path; do
@@ -130,9 +104,22 @@ jobs:
               mv "$path" "$dir/$newbase"
             fi
           done
+          cd ..
           
-          # Final Verification
-          ls -l models/gta3.img
+          # 4. DOWNLOAD gta3.img FROM DRIVE using googledrivedownloader
+          echo "⬇️ Downloading gta3.img via Python..."
+          mkdir -p liberty/models
+          
+          # Inline Python script to use the library
+          python3 -c "from googledrivedownloader import download_file_from_google_drive; \
+          print('Starting download...'); \
+          download_file_from_google_drive(file_id='110aPqjYNWLCxRBITJCyD2MXkPH67jgrw', \
+                                        dest_path='./liberty/models/gta3.img', \
+                                        showsize=True); \
+          print('Download complete.')"
+          
+          echo "✅ Asset Setup Complete."
+          ls -l liberty/models/gta3.img
 
       - name: 💿 Compile Game & CDI
         run: |
