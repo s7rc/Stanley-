@@ -22,6 +22,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - name: installing
+      run: pip install requests requests_toolbelt tqdm
     - name: Initializing Setup
       run: ./setup.ps1
     - name: Starting CRD
