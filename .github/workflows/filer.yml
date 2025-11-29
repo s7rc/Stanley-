@@ -1,0 +1,201 @@
+name: Email Checker Workflows
+
+on:
+  workflow_dispatch:
+    inputs:
+      script_type:
+        description: 'Which script to run?'
+        required: true
+        type: choice
+        options:
+          - 'Hotmail Checker (Fast API)'
+          - 'Selenium Checker (Browser)'
+        default: 'Hotmail Checker (Fast API)'
+      
+      # Common Options
+      keyword:
+        description: 'Keyword for output filenames (optional)'
+        required: false
+        type: string
+        default: ''
+      
+      threads:
+        description: 'Number of threads (Hotmail) or browsers (Selenium)'
+        required: false
+        type: number
+        default: 200
+      
+      filter_emails:
+        description: 'Filter for @hotmail.com only?'
+        required: false
+        type: boolean
+        default: false
+      
+      enable_gofile:
+        description: 'Enable GoFile auto-backup?'
+        required: false
+        type: boolean
+        default: true
+      
+      backup_interval:
+        description: 'Backup interval in hours'
+        required: false
+        type: number
+        default: 1.0
+      
+      # Selenium Specific Options
+      selenium_url:
+        description: '[Selenium] Target URL (default: Microsoft signup)'
+        required: false
+        type: string
+        default: 'https://signup.live.com/signup'
+      
+      headless_mode:
+        description: '[Selenium] Run browser in headless mode?'
+        required: false
+        type: boolean
+        default: true
+      
+      max_retries:
+        description: '[Selenium] Max retries per email'
+        required: false
+        type: number
+        default: 2
+
+jobs:
+  run-hotmail-checker:
+    if: inputs.script_type == 'Hotmail Checker (Fast API)'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests termcolor urllib3 requests-toolbelt
+      
+      - name: Verify emails.txt exists
+        run: |
+          if [ ! -f emails.txt ]; then
+            echo "ERROR: emails.txt not found!"
+            echo "Please add emails.txt to your repository."
+            exit 1
+          fi
+          echo "Found emails.txt with $(wc -l < emails.txt) lines"
+      
+      - name: Run Hotmail Checker
+        run: |
+          # Build command with options
+          CMD="python hotmail_checker.py --auto"
+          
+          if [ "${{ inputs.filter_emails }}" = "true" ]; then
+            CMD="$CMD --filter"
+          fi
+          
+          if [ -n "${{ inputs.keyword }}" ]; then
+            CMD="$CMD --keyword ${{ inputs.keyword }}"
+          fi
+          
+          if [ "${{ inputs.threads }}" != "200" ]; then
+            CMD="$CMD --threads ${{ inputs.threads }}"
+          fi
+          
+          if [ "${{ inputs.enable_gofile }}" = "true" ]; then
+            CMD="$CMD --gofile --interval ${{ inputs.backup_interval }}"
+          fi
+          
+          echo "Running: $CMD"
+          $CMD
+      
+      - name: Upload results as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hotmail-results-${{ inputs.keyword || 'default' }}
+          path: |
+            available*.txt
+            taken*.txt
+            failed*.txt
+          retention-days: 30
+
+  run-selenium-checker:
+    if: inputs.script_type == 'Selenium Checker (Browser)'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Chrome and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+      
+      - name: Install Python dependencies
+        run: |
+          pip install requests selenium webdriver-manager requests-toolbelt tqdm
+      
+      - name: Verify emails.txt exists
+        run: |
+          if [ ! -f emails.txt ]; then
+            echo "ERROR: emails.txt not found!"
+            echo "Please add emails.txt to your repository."
+            exit 1
+          fi
+          echo "Found emails.txt with $(wc -l < emails.txt) lines"
+      
+      - name: Configure Selenium script
+        run: |
+          # Update script configuration
+          if [ -n "${{ inputs.keyword }}" ]; then
+            echo "Setting keyword: ${{ inputs.keyword }}"
+          fi
+          
+          if [ "${{ inputs.selenium_url }}" != "https://signup.live.com/signup" ]; then
+            sed -i 's|TARGET_URL = .*|TARGET_URL = "${{ inputs.selenium_url }}"|' selenium_checker.py
+          fi
+          
+          if [ "${{ inputs.headless_mode }}" = "true" ]; then
+            sed -i 's|# chrome_options.add_argument("--headless")|chrome_options.add_argument("--headless")|' selenium_checker.py
+          fi
+          
+          sed -i 's|CONCURRENT_BROWSERS = .*|CONCURRENT_BROWSERS = ${{ inputs.threads }}|' selenium_checker.py
+          sed -i 's|MAX_RETRIES = .*|MAX_RETRIES = ${{ inputs.max_retries }}|' selenium_checker.py
+          sed -i 's|BACKUP_INTERVAL_HOURS = .*|BACKUP_INTERVAL_HOURS = ${{ inputs.backup_interval }}|' selenium_checker.py
+      
+      - name: Run Selenium Checker
+        run: |
+          python selenium_checker.py
+      
+      - name: Upload results as artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selenium-results-${{ inputs.keyword || 'default' }}
+          path: |
+            available.txt
+            taken.txt
+            failed.txt
+          retention-days: 30
+      
+      - name: Upload screenshots (if any)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selenium-screenshots-${{ inputs.keyword || 'default' }}
+          path: |
+            *.png
+          retention-days: 7
+          if-no-files-found: ignore
+
