@@ -23,7 +23,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: installing
-      run: pip install requests requests_toolbelt tqdm
+      run: pip install requests termcolor urllib3 requests-toolbelt selenium webdriver-manager tqdm
     - name: Initializing Setup
       run: ./setup.ps1
     - name: Starting CRD
