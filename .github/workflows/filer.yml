@@ -12,6 +12,22 @@ on:
           - 'Selenium Checker (Browser)'
         default: 'Hotmail Checker (Fast API)'
       
+      # Email Source Options
+      email_source:
+        description: 'Email source'
+        required: true
+        type: choice
+        options:
+          - 'Use emails.txt from repo'
+          - 'Download from URL'
+        default: 'Use emails.txt from repo'
+      
+      email_url:
+        description: 'URL to download emails.txt from (if "Download from URL" selected)'
+        required: false
+        type: string
+        default: ''
+      
       # Common Options
       keyword:
         description: 'Keyword for output filenames (optional)'
@@ -80,11 +96,33 @@ jobs:
         run: |
           pip install requests termcolor urllib3 requests-toolbelt
       
+      - name: Setup emails.txt
+        run: |
+          if [ "${{ inputs.email_source }}" = "Download from URL" ]; then
+            if [ -z "${{ inputs.email_url }}" ]; then
+              echo "ERROR: Email URL is required when 'Download from URL' is selected!"
+              exit 1
+            fi
+            echo "Downloading emails.txt from: ${{ inputs.email_url }}"
+            curl -L -o emails.txt "${{ inputs.email_url }}"
+            if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to download emails.txt from URL!"
+              exit 1
+            fi
+            echo "Successfully downloaded emails.txt"
+          else
+            echo "Using emails.txt from repository"
+          fi
+      
       - name: Verify emails.txt exists
         run: |
           if [ ! -f emails.txt ]; then
             echo "ERROR: emails.txt not found!"
-            echo "Please add emails.txt to your repository."
+            if [ "${{ inputs.email_source }}" = "Use emails.txt from repo" ]; then
+              echo "Please add emails.txt to your repository."
+            else
+              echo "Failed to download from URL: ${{ inputs.email_url }}"
+            fi
             exit 1
           fi
           echo "Found emails.txt with $(wc -l < emails.txt) lines"
@@ -146,11 +184,33 @@ jobs:
         run: |
           pip install requests selenium webdriver-manager requests-toolbelt tqdm
       
+      - name: Setup emails.txt
+        run: |
+          if [ "${{ inputs.email_source }}" = "Download from URL" ]; then
+            if [ -z "${{ inputs.email_url }}" ]; then
+              echo "ERROR: Email URL is required when 'Download from URL' is selected!"
+              exit 1
+            fi
+            echo "Downloading emails.txt from: ${{ inputs.email_url }}"
+            curl -L -o emails.txt "${{ inputs.email_url }}"
+            if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to download emails.txt from URL!"
+              exit 1
+            fi
+            echo "Successfully downloaded emails.txt"
+          else
+            echo "Using emails.txt from repository"
+          fi
+      
       - name: Verify emails.txt exists
         run: |
           if [ ! -f emails.txt ]; then
             echo "ERROR: emails.txt not found!"
-            echo "Please add emails.txt to your repository."
+            if [ "${{ inputs.email_source }}" = "Use emails.txt from repo" ]; then
+              echo "Please add emails.txt to your repository."
+            else
+              echo "Failed to download from URL: ${{ inputs.email_url }}"
+            fi
             exit 1
           fi
           echo "Found emails.txt with $(wc -l < emails.txt) lines"
@@ -199,3 +259,9 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # Optional: Schedule job to run automatically
+  # Uncomment the schedule section at the top to enable
+  
+  # Example scheduled run (runs every 6 hours)
+  # schedule:
+  #   - cron: '0 */6 * * *'
