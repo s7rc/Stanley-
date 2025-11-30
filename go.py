@@ -28,6 +28,7 @@ checked_count = 0
 available_count = 0
 taken_count = 0
 start_time = None
+is_uploading = False  # Flag to pause checking during upload
 
 # Configuration
 THREADS = 200
@@ -173,6 +174,11 @@ def upload_to_gofile(filepath):
 
 def perform_backup():
     """Executes the Zip -> Upload -> Cleanup cycle."""
+    global is_uploading
+    
+    print(colored("\n[BACKUP] 🛑 PAUSING EMAIL CHECKING...", 'yellow', attrs=['bold']))
+    is_uploading = True
+    
     print(colored("[BACKUP] Starting backup process...", 'cyan'))
     
     zip_name = get_timestamped_name()
@@ -191,9 +197,13 @@ def perform_backup():
         except Exception as e:
             print(colored(f"[BACKUP] Warning: Could not delete zip: {e}", 'yellow'))
         
+        is_uploading = False
+        print(colored("[BACKUP] ✅ RESUMING EMAIL CHECKING...\n", 'green', attrs=['bold']))
         return upload_success
     else:
         print(colored("[BACKUP] ERROR: Failed to create zip file!", 'red'))
+        is_uploading = False
+        print(colored("[BACKUP] ✅ RESUMING EMAIL CHECKING...\n", 'green', attrs=['bold']))
         return False
 
 def background_backup_task():
@@ -270,7 +280,11 @@ def init_session(thread_count):
 
 def check(email):
     """Check email availability with optimized settings"""
-    global checked_count, available_count, taken_count
+    global checked_count, available_count, taken_count, is_uploading
+    
+    # Wait if backup is in progress
+    while is_uploading:
+        time.sleep(0.5)
     
     # IMPORTANT: These headers are required for accurate results
     headers = {
