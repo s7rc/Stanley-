@@ -95,99 +95,128 @@ def get_timestamped_name():
     return f"HotmailBackup{keyword_part}_{timestamp}_{random_num}.zip"
 
 def zip_results(output_filename):
-    """Zips the current directory (filtering for relevant files)"""
+    """Zips only the essential email files"""
     try:
-        source_dir = "."
         zip_path = os.path.abspath(output_filename)
+        
+        print(colored(f"[BACKUP] Creating zip: {output_filename}", 'cyan'))
+        
+        # Only backup these specific files
+        files_to_backup = [INPUT_FILE, AVAILABLE_FILE, TAKEN_FILE]
 
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(source_dir):
-                for file in files:
-                    if file == output_filename:
-                        continue
-                    
-                    # Include input file, output files, and Python scripts
-                    if file == INPUT_FILE or file.endswith(('.txt', '.py')):
-                        file_path = os.path.join(root, file)
-                        zipf.write(file_path, file)
+            files_added = 0
+            for file in files_to_backup:
+                if os.path.exists(file):
+                    zipf.write(file, file)
+                    files_added += 1
+                    print(colored(f"[BACKUP]   Added: {file}", 'cyan'))
+                else:
+                    print(colored(f"[BACKUP]   Skipped (not found): {file}", 'yellow'))
         
-        print(colored(f"[BACKUP] Created zip: {output_filename}", 'cyan'))
+        print(colored(f"[BACKUP] Zip complete! Added {files_added} files.", 'green'))
         return zip_path
     except Exception as e:
         print(colored(f"[BACKUP ERROR] Could not zip files: {e}", 'red'))
+        import traceback
+        traceback.print_exc()
         return None
 
 def upload_to_gofile(filepath):
     """Uploads the file to GoFile"""
     if not os.path.isfile(filepath):
+        print(colored(f"[BACKUP] ERROR: File not found: {filepath}", 'red'))
         return False
 
     url = "https://upload.gofile.io/uploadfile"
     filename = os.path.basename(filepath)
     
-    print(colored(f"[BACKUP] Uploading {filename}...", 'cyan'))
+    print(colored(f"[BACKUP] Uploading {filename} ({os.path.getsize(filepath)} bytes)...", 'cyan'))
 
     try:
-        encoder = MultipartEncoder(
-            fields={
-                'file': (filename, open(filepath, 'rb'), 'application/octet-stream'),
-                'token': GOFILE_TOKEN,
-                'folderId': GOFILE_FOLDER_ID
-            }
-        )
-        headers = {'Content-Type': encoder.content_type}
+        with open(filepath, 'rb') as f:
+            encoder = MultipartEncoder(
+                fields={
+                    'file': (filename, f, 'application/octet-stream'),
+                    'token': GOFILE_TOKEN,
+                    'folderId': GOFILE_FOLDER_ID
+                }
+            )
+            headers = {'Content-Type': encoder.content_type}
+            
+            print(colored(f"[BACKUP] Sending request to GoFile...", 'cyan'))
+            response = requests.post(url, data=encoder, headers=headers, timeout=120)
         
-        response = requests.post(url, data=encoder, headers=headers, timeout=120)
+        print(colored(f"[BACKUP] Response status: {response.status_code}", 'cyan'))
         
         try:
             data = response.json()
+            print(colored(f"[BACKUP] Response data: {data}", 'cyan'))
+            
             if data.get('status') == 'ok':
                 link = data.get('data', {}).get('downloadPage')
                 print(colored(f"[BACKUP] ✓ Success! Link: {link}", 'green'))
                 return True
             else:
                 print(colored(f"[BACKUP] ✗ Failed. Status: {data.get('status')}", 'red'))
-        except:
-            print(colored(f"[BACKUP] ✗ Failed to parse response.", 'red'))
+                print(colored(f"[BACKUP] Full response: {data}", 'red'))
+        except Exception as e:
+            print(colored(f"[BACKUP] ✗ Failed to parse response: {e}", 'red'))
+            print(colored(f"[BACKUP] Raw response: {response.text[:500]}", 'red'))
             
     except Exception as e:
         print(colored(f"[BACKUP] ✗ Upload Error: {e}", 'red'))
+        import traceback
+        traceback.print_exc()
     
     return False
 
 def perform_backup():
     """Executes the Zip -> Upload -> Cleanup cycle."""
+    print(colored("[BACKUP] Starting backup process...", 'cyan'))
+    
     zip_name = get_timestamped_name()
+    print(colored(f"[BACKUP] Zip filename: {zip_name}", 'cyan'))
+    
     zip_path = zip_results(zip_name)
     
     if zip_path:
+        print(colored(f"[BACKUP] Zip created successfully at: {zip_path}", 'green'))
         upload_success = upload_to_gofile(zip_path)
+        
         # Clean up local zip
         try:
             os.remove(zip_path)
             print(colored("[BACKUP] Local temp file cleaned up.", 'cyan'))
-        except:
-            pass
+        except Exception as e:
+            print(colored(f"[BACKUP] Warning: Could not delete zip: {e}", 'yellow'))
+        
         return upload_success
-    return False
+    else:
+        print(colored("[BACKUP] ERROR: Failed to create zip file!", 'red'))
+        return False
 
 def background_backup_task():
     """Running in a separate thread to handle periodic backups."""
     global IS_RUNNING
-    print(colored(f"[SYSTEM] Backup scheduler started. Will upload every {BACKUP_INTERVAL_HOURS} hour(s).", 'cyan'))
+    total_seconds = int(BACKUP_INTERVAL_HOURS * 3600)
+    print(colored(f"[SYSTEM] Backup scheduler started. Will upload every {BACKUP_INTERVAL_HOURS} hour(s) ({total_seconds} seconds).", 'cyan'))
     
     while IS_RUNNING:
         # Wait for the interval (in chunks to allow faster exit)
-        total_seconds = int(BACKUP_INTERVAL_HOURS * 3600)
-        for _ in range(total_seconds): 
+        for i in range(total_seconds): 
             if not IS_RUNNING: 
                 break
             time.sleep(1)
+            # Show countdown every 30 seconds
+            if (i + 1) % 30 == 0 and IS_RUNNING:
+                remaining = total_seconds - (i + 1)
+                print(colored(f"\n[BACKUP] Next backup in {remaining} seconds...", 'yellow'))
         
         if IS_RUNNING:
-            print(colored("\n[BACKUP] Starting scheduled backup...", 'yellow'))
+            print(colored("\n[BACKUP] ⏰ Time to backup! Starting now...", 'yellow'))
             perform_backup()
-            print(colored("[BACKUP] Scheduled backup complete.\n", 'yellow'))
+            print(colored("[BACKUP] ✓ Scheduled backup complete.\n", 'yellow'))
 
 def load_processed_emails():
     """Load all previously checked emails (both available and taken)"""
@@ -363,9 +392,9 @@ def show_menu():
                 interval_input = input(colored("[?] Enter backup interval in hours (default 1): ", 'yellow')).strip()
                 if interval_input:
                     BACKUP_INTERVAL_HOURS = float(interval_input)
-                    if BACKUP_INTERVAL_HOURS < 0.1:
-                        print(colored("[!] Minimum interval is 0.1 hours (6 minutes).", 'yellow'))
-                        BACKUP_INTERVAL_HOURS = 0.1
+                    if BACKUP_INTERVAL_HOURS < 0.0083:  # Minimum 30 seconds
+                        print(colored("[!] Minimum interval is 0.0083 hours (30 seconds).", 'yellow'))
+                        BACKUP_INTERVAL_HOURS = 0.0083
                 print(colored(f"[✓] Backup interval set to: {BACKUP_INTERVAL_HOURS} hour(s)", 'green'))
             except ValueError:
                 print(colored("[!] Invalid number. Keeping default.", 'red'))
@@ -410,7 +439,7 @@ Examples:
     parser.add_argument('--gofile', action='store_true',
                        help='Enable GoFile auto-backup')
     parser.add_argument('--interval', type=float, default=1.0,
-                       help='Backup interval in hours (default: 1.0)')
+                       help='Backup interval in hours (default: 1.0, min: 0.0083 for 30 seconds)')
     parser.add_argument('--auto', action='store_true',
                        help='Skip menu and start immediately')
     
@@ -420,7 +449,7 @@ Examples:
     FILTER_ENABLED = args.filter
     THREADS = min(args.threads, 500)  # Cap at 500
     GOFILE_ENABLED = args.gofile
-    BACKUP_INTERVAL_HOURS = max(args.interval, 0.1)  # Minimum 0.1 hours
+    BACKUP_INTERVAL_HOURS = max(args.interval, 0.0083)  # Minimum 30 seconds (0.0083 hours)
     
     if args.keyword:
         KEYWORD = args.keyword
@@ -452,6 +481,8 @@ else:
 # Start GoFile backup thread if enabled
 backup_thread = None
 if GOFILE_ENABLED:
+    print(colored(f"\n[DEBUG] BACKUP_INTERVAL_HOURS = {BACKUP_INTERVAL_HOURS}", 'magenta'))
+    print(colored(f"[DEBUG] Calculated seconds = {int(BACKUP_INTERVAL_HOURS * 3600)}", 'magenta'))
     backup_thread = threading.Thread(target=background_backup_task, daemon=True)
     backup_thread.start()
 
