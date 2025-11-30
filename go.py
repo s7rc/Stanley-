@@ -178,7 +178,8 @@ def background_backup_task():
     
     while IS_RUNNING:
         # Wait for the interval (in chunks to allow faster exit)
-        for _ in range(BACKUP_INTERVAL_HOURS * 3600): 
+        total_seconds = int(BACKUP_INTERVAL_HOURS * 3600)
+        for _ in range(total_seconds): 
             if not IS_RUNNING: 
                 break
             time.sleep(1)
