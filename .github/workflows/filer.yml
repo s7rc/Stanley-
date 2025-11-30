@@ -20,10 +20,23 @@ on:
         options:
           - 'Use emails.txt from repo'
           - 'Download from URL'
+          - 'Download from GoFile'
         default: 'Use emails.txt from repo'
       
       email_url:
         description: 'URL to download emails.txt from (if "Download from URL" selected)'
+        required: false
+        type: string
+        default: ''
+      
+      gofile_url:
+        description: 'GoFile URL (if "Download from GoFile" selected) - e.g., https://gofile.io/d/abc123'
+        required: false
+        type: string
+        default: ''
+      
+      gofile_password:
+        description: 'GoFile password (if required)'
         required: false
         type: string
         default: ''
@@ -110,6 +123,106 @@ jobs:
               exit 1
             fi
             echo "Successfully downloaded emails.txt"
+          elif [ "${{ inputs.email_source }}" = "Download from GoFile" ]; then
+            if [ -z "${{ inputs.gofile_url }}" ]; then
+              echo "ERROR: GoFile URL is required when 'Download from GoFile' is selected!"
+              exit 1
+            fi
+            echo "Downloading emails.txt from GoFile: ${{ inputs.gofile_url }}"
+            
+            # Create inline GoFile downloader
+            python3 - "${{ inputs.gofile_url }}" "${{ inputs.gofile_password }}" << 'GOFILE_SCRIPT'
+          from os import getcwd, makedirs, path
+          from sys import exit, stdout, stderr, argv
+          from requests import Session, Response, Timeout
+          from typing import Any, TextIO, NoReturn
+          from shutil import move
+          
+          def _print(msg: str) -> None:
+              stdout.write(msg)
+              stdout.flush()
+          
+          class GoFileDownloader:
+              def __init__(self, url: str, password: str = ""):
+                  self._session = Session()
+                  self._headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+                  self._url = url
+                  self._password = password
+                  
+              def _get_response(self, **kwargs):
+                  for _ in range(3):
+                      try:
+                          return self._session.get(timeout=15, **kwargs)
+                      except:
+                          continue
+              
+              def _set_token(self):
+                  try:
+                      resp = self._session.post("https://api.gofile.io/accounts", headers=self._headers, timeout=15).json()
+                      token = resp['data']['token']
+                      self._headers["Cookie"] = f"accountToken={token}"
+                      self._headers["Authorization"] = f"Bearer {token}"
+                  except:
+                      exit(1)
+              
+              def _download_file(self, url: str, filepath: str):
+                  resp = self._get_response(url=url, headers=self._headers, stream=True)
+                  if resp:
+                      with open(filepath, 'wb') as f:
+                          for chunk in resp.iter_content(8192):
+                              f.write(chunk)
+                      _print(f"Downloaded: {filepath}\n")
+              
+              def _fetch_content(self, parent_dir: str, content_id: str):
+                  url = f"https://api.gofile.io/contents/{content_id}?wt=4fd6sg89d7s6&cache=true"
+                  if self._password:
+                      from hashlib import sha256
+                      url += f"&password={sha256(self._password.encode()).hexdigest()}"
+                  
+                  resp = self._get_response(url=url, headers=self._headers)
+                  if not resp:
+                      exit(1)
+                  
+                  data = resp.json()["data"]
+                  
+                  if data["type"] != "folder":
+                      self._download_file(data["link"], path.join(parent_dir, data["name"]))
+                      return
+                  
+                  folder = path.join(parent_dir, data["name"]) if path.basename(parent_dir) != content_id else parent_dir
+                  makedirs(folder, exist_ok=True)
+                  
+                  for child in data["children"].values():
+                      if child["type"] == "folder":
+                          self._fetch_content(folder, child["id"])
+                      else:
+                          self._download_file(child["link"], path.join(folder, child["name"]))
+              
+              def run(self):
+                  content_id = self._url.split("/")[-1]
+                  _print("Downloading from GoFile...\n")
+                  self._set_token()
+                  self._fetch_content(getcwd(), content_id)
+                  _print("Complete!\n")
+          
+          if __name__ == "__main__":
+              GoFileDownloader(argv[1], argv[2] if len(argv) > 2 and argv[2] else "").run()
+          GOFILE_SCRIPT
+            
+            # Find the downloaded file
+            CONTENT_ID=$(echo "${{ inputs.gofile_url }}" | awk -F'/' '{print $NF}')
+            FOUND_FILE=$(find "$CONTENT_ID" -name "emails.txt" -o -name "*.txt" 2>/dev/null | head -n 1)
+            
+            if [ -z "$FOUND_FILE" ]; then
+              echo "ERROR: Could not find emails.txt in downloaded GoFile content!"
+              ls -la "$CONTENT_ID" 2>/dev/null || echo "Content directory not found"
+              exit 1
+            fi
+            
+            mv "$FOUND_FILE" emails.txt
+            rm -rf "$CONTENT_ID"
+            
+            echo "Successfully downloaded emails.txt from GoFile"
           else
             echo "Using emails.txt from repository"
           fi
@@ -120,8 +233,10 @@ jobs:
             echo "ERROR: emails.txt not found!"
             if [ "${{ inputs.email_source }}" = "Use emails.txt from repo" ]; then
               echo "Please add emails.txt to your repository."
-            else
+            elif [ "${{ inputs.email_source }}" = "Download from URL" ]; then
               echo "Failed to download from URL: ${{ inputs.email_url }}"
+            else
+              echo "Failed to download from GoFile: ${{ inputs.gofile_url }}"
             fi
             exit 1
           fi
@@ -202,14 +317,128 @@ jobs:
             echo "Using emails.txt from repository"
           fi
       
+      - name: Setup emails.txt
+        run: |
+          if [ "${{ inputs.email_source }}" = "Download from URL" ]; then
+            if [ -z "${{ inputs.email_url }}" ]; then
+              echo "ERROR: Email URL is required when 'Download from URL' is selected!"
+              exit 1
+            fi
+            echo "Downloading emails.txt from: ${{ inputs.email_url }}"
+            curl -L -o emails.txt "${{ inputs.email_url }}"
+            if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to download emails.txt from URL!"
+              exit 1
+            fi
+            echo "Successfully downloaded emails.txt"
+          elif [ "${{ inputs.email_source }}" = "Download from GoFile" ]; then
+            if [ -z "${{ inputs.gofile_url }}" ]; then
+              echo "ERROR: GoFile URL is required when 'Download from GoFile' is selected!"
+              exit 1
+            fi
+            echo "Downloading emails.txt from GoFile: ${{ inputs.gofile_url }}"
+            
+            # Create inline GoFile downloader
+            python3 - "${{ inputs.gofile_url }}" "${{ inputs.gofile_password }}" << 'GOFILE_SCRIPT'
+          from os import getcwd, makedirs, path
+          from sys import exit, stdout, argv
+          from requests import Session
+          
+          class GoFileDownloader:
+              def __init__(self, url: str, password: str = ""):
+                  self._session = Session()
+                  self._headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
+                  self._url = url
+                  self._password = password
+                  
+              def _get_response(self, **kwargs):
+                  for _ in range(3):
+                      try:
+                          return self._session.get(timeout=15, **kwargs)
+                      except:
+                          continue
+              
+              def _set_token(self):
+                  try:
+                      resp = self._session.post("https://api.gofile.io/accounts", headers=self._headers, timeout=15).json()
+                      token = resp['data']['token']
+                      self._headers["Cookie"] = f"accountToken={token}"
+                      self._headers["Authorization"] = f"Bearer {token}"
+                  except:
+                      exit(1)
+              
+              def _download_file(self, url: str, filepath: str):
+                  resp = self._get_response(url=url, headers=self._headers, stream=True)
+                  if resp:
+                      with open(filepath, 'wb') as f:
+                          for chunk in resp.iter_content(8192):
+                              f.write(chunk)
+                      stdout.write(f"Downloaded: {filepath}\n")
+              
+              def _fetch_content(self, parent_dir: str, content_id: str):
+                  url = f"https://api.gofile.io/contents/{content_id}?wt=4fd6sg89d7s6&cache=true"
+                  if self._password:
+                      from hashlib import sha256
+                      url += f"&password={sha256(self._password.encode()).hexdigest()}"
+                  
+                  resp = self._get_response(url=url, headers=self._headers)
+                  if not resp:
+                      exit(1)
+                  
+                  data = resp.json()["data"]
+                  
+                  if data["type"] != "folder":
+                      self._download_file(data["link"], path.join(parent_dir, data["name"]))
+                      return
+                  
+                  folder = path.join(parent_dir, data["name"]) if path.basename(parent_dir) != content_id else parent_dir
+                  makedirs(folder, exist_ok=True)
+                  
+                  for child in data["children"].values():
+                      if child["type"] == "folder":
+                          self._fetch_content(folder, child["id"])
+                      else:
+                          self._download_file(child["link"], path.join(folder, child["name"]))
+              
+              def run(self):
+                  content_id = self._url.split("/")[-1]
+                  stdout.write("Downloading from GoFile...\n")
+                  self._set_token()
+                  self._fetch_content(getcwd(), content_id)
+                  stdout.write("Complete!\n")
+          
+          if __name__ == "__main__":
+              GoFileDownloader(argv[1], argv[2] if len(argv) > 2 and argv[2] else "").run()
+          GOFILE_SCRIPT
+            
+            # Find the downloaded file
+            CONTENT_ID=$(echo "${{ inputs.gofile_url }}" | awk -F'/' '{print $NF}')
+            FOUND_FILE=$(find "$CONTENT_ID" -name "emails.txt" -o -name "*.txt" 2>/dev/null | head -n 1)
+            
+            if [ -z "$FOUND_FILE" ]; then
+              echo "ERROR: Could not find emails.txt in downloaded GoFile content!"
+              ls -la "$CONTENT_ID" 2>/dev/null || echo "Content directory not found"
+              exit 1
+            fi
+            
+            mv "$FOUND_FILE" emails.txt
+            rm -rf "$CONTENT_ID"
+            
+            echo "Successfully downloaded emails.txt from GoFile"
+          else
+            echo "Using emails.txt from repository"
+          fi
+      
       - name: Verify emails.txt exists
         run: |
           if [ ! -f emails.txt ]; then
             echo "ERROR: emails.txt not found!"
             if [ "${{ inputs.email_source }}" = "Use emails.txt from repo" ]; then
               echo "Please add emails.txt to your repository."
-            else
+            elif [ "${{ inputs.email_source }}" = "Download from URL" ]; then
               echo "Failed to download from URL: ${{ inputs.email_url }}"
+            else
+              echo "Failed to download from GoFile: ${{ inputs.gofile_url }}"
             fi
             exit 1
           fi
