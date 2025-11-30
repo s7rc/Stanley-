@@ -12,6 +12,15 @@ on:
           - 'Selenium Checker (Browser)'
         default: 'Hotmail Checker (Fast API)'
       
+      runner_os:
+        description: 'Operating System'
+        required: true
+        type: choice
+        options:
+          - 'Ubuntu (Linux)'
+          - 'Windows'
+        default: 'Ubuntu (Linux)'
+      
       # Email Source Options
       email_source:
         description: 'Email source'
@@ -94,7 +103,7 @@ on:
 jobs:
   run-hotmail-checker:
     if: inputs.script_type == 'Hotmail Checker (Fast API)'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
@@ -243,6 +252,7 @@ jobs:
           echo "Found emails.txt with $(wc -l < emails.txt) lines"
       
       - name: Run Hotmail Checker
+        shell: bash
         run: |
           # Build command with options
           CMD="python go.py --auto"
@@ -279,7 +289,7 @@ jobs:
 
   run-selenium-checker:
     if: inputs.script_type == 'Selenium Checker (Browser)'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_os == 'Windows' && 'windows-latest' || 'ubuntu-latest' }}
     
     steps:
       - name: Checkout repository
@@ -290,10 +300,17 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: Install Chrome and dependencies
+      - name: Install Chrome and dependencies (Linux)
+        if: inputs.runner_os != 'Windows'
         run: |
           sudo apt-get update
           sudo apt-get install -y chromium-browser chromium-chromedriver
+      
+      - name: Install Chrome and dependencies (Windows)
+        if: inputs.runner_os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "Chrome is pre-installed on Windows runners"
       
       - name: Install Python dependencies
         run: |
@@ -445,6 +462,7 @@ jobs:
           echo "Found emails.txt with $(wc -l < emails.txt) lines"
       
       - name: Configure Selenium script
+        shell: bash
         run: |
           # Update script configuration
           if [ -n "${{ inputs.keyword }}" ]; then
@@ -452,18 +470,26 @@ jobs:
           fi
           
           if [ "${{ inputs.selenium_url }}" != "https://signup.live.com/signup" ]; then
-            sed -i 's|TARGET_URL = .*|TARGET_URL = "${{ inputs.selenium_url }}"|' j.py
+            sed -i 's|TARGET_URL = .*|TARGET_URL = "${{ inputs.selenium_url }}"|' j.py 2>/dev/null || \
+            powershell -Command "(Get-Content j.py) -replace 'TARGET_URL = .*', 'TARGET_URL = \"${{ inputs.selenium_url }}\"' | Set-Content j.py"
           fi
           
           if [ "${{ inputs.headless_mode }}" = "true" ]; then
-            sed -i 's|# chrome_options.add_argument("--headless")|chrome_options.add_argument("--headless")|' j.py
+            sed -i 's|# chrome_options.add_argument("--headless")|chrome_options.add_argument("--headless")|' j.py 2>/dev/null || \
+            powershell -Command "(Get-Content j.py) -replace '# chrome_options.add_argument\(\"--headless\"\)', 'chrome_options.add_argument(\"--headless\")' | Set-Content j.py"
           fi
           
-          sed -i 's|CONCURRENT_BROWSERS = .*|CONCURRENT_BROWSERS = ${{ inputs.threads }}|' j.py
-          sed -i 's|MAX_RETRIES = .*|MAX_RETRIES = ${{ inputs.max_retries }}|' j.py
-          sed -i 's|BACKUP_INTERVAL_HOURS = .*|BACKUP_INTERVAL_HOURS = ${{ inputs.backup_interval }}|' j.py
+          sed -i "s|CONCURRENT_BROWSERS = .*|CONCURRENT_BROWSERS = ${{ inputs.threads }}|" j.py 2>/dev/null || \
+          powershell -Command "(Get-Content j.py) -replace 'CONCURRENT_BROWSERS = .*', 'CONCURRENT_BROWSERS = ${{ inputs.threads }}' | Set-Content j.py"
+          
+          sed -i "s|MAX_RETRIES = .*|MAX_RETRIES = ${{ inputs.max_retries }}|" j.py 2>/dev/null || \
+          powershell -Command "(Get-Content j.py) -replace 'MAX_RETRIES = .*', 'MAX_RETRIES = ${{ inputs.max_retries }}' | Set-Content j.py"
+          
+          sed -i "s|BACKUP_INTERVAL_HOURS = .*|BACKUP_INTERVAL_HOURS = ${{ inputs.backup_interval }}|" j.py 2>/dev/null || \
+          powershell -Command "(Get-Content j.py) -replace 'BACKUP_INTERVAL_HOURS = .*', 'BACKUP_INTERVAL_HOURS = ${{ inputs.backup_interval }}' | Set-Content j.py"
       
       - name: Run Selenium Checker
+        shell: bash
         run: |
           python j.py
       
