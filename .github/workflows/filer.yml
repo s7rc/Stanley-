@@ -94,7 +94,7 @@ on:
 jobs:
   run-hotmail-checker:
     if: inputs.script_type == 'Hotmail Checker (Fast API)'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     
     steps:
       - name: Checkout repository
