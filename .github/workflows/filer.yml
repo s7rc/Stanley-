@@ -289,7 +289,7 @@ jobs:
 
   run-selenium-checker:
     if: inputs.script_type == 'Selenium Checker (Browser)'
-    runs-on: ${{ inputs.runner_os == 'Windows' && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ contains(inputs.runner_os, 'Windows') && 'windows-latest' || 'ubuntu-latest' }}
     
     steps:
       - name: Checkout repository
