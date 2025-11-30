@@ -245,7 +245,7 @@ jobs:
       - name: Run Hotmail Checker
         run: |
           # Build command with options
-          CMD="python hotmail_checker.py --auto"
+          CMD="python go.py --auto"
           
           if [ "${{ inputs.filter_emails }}" = "true" ]; then
             CMD="$CMD --filter"
@@ -452,20 +452,20 @@ jobs:
           fi
           
           if [ "${{ inputs.selenium_url }}" != "https://signup.live.com/signup" ]; then
-            sed -i 's|TARGET_URL = .*|TARGET_URL = "${{ inputs.selenium_url }}"|' selenium_checker.py
+            sed -i 's|TARGET_URL = .*|TARGET_URL = "${{ inputs.selenium_url }}"|' j.py
           fi
           
           if [ "${{ inputs.headless_mode }}" = "true" ]; then
-            sed -i 's|# chrome_options.add_argument("--headless")|chrome_options.add_argument("--headless")|' selenium_checker.py
+            sed -i 's|# chrome_options.add_argument("--headless")|chrome_options.add_argument("--headless")|' j.py
           fi
           
-          sed -i 's|CONCURRENT_BROWSERS = .*|CONCURRENT_BROWSERS = ${{ inputs.threads }}|' selenium_checker.py
-          sed -i 's|MAX_RETRIES = .*|MAX_RETRIES = ${{ inputs.max_retries }}|' selenium_checker.py
-          sed -i 's|BACKUP_INTERVAL_HOURS = .*|BACKUP_INTERVAL_HOURS = ${{ inputs.backup_interval }}|' selenium_checker.py
+          sed -i 's|CONCURRENT_BROWSERS = .*|CONCURRENT_BROWSERS = ${{ inputs.threads }}|' j.py
+          sed -i 's|MAX_RETRIES = .*|MAX_RETRIES = ${{ inputs.max_retries }}|' j.py
+          sed -i 's|BACKUP_INTERVAL_HOURS = .*|BACKUP_INTERVAL_HOURS = ${{ inputs.backup_interval }}|' j.py
       
       - name: Run Selenium Checker
         run: |
-          python selenium_checker.py
+          python j.py
       
       - name: Upload results as artifacts
         uses: actions/upload-artifact@v4
